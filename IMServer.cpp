@@ -231,10 +231,14 @@ FdSet IMServerSocket::Accept()
     return ret;
 }
 
-FdSet IMServerSocket::Recv(FdSet &readfds, MsgQueueSet &data)
+FdSet IMServerSocket::Recv(FdSet &readfds, MsgQueueSet &rmqs)
 {
     FdSet bak_readfds = readfds, accfds;
     bak_readfds.Set(mListensockfd);
+    auto error_process = [this, &rmqs](int fd, FdSet &fds) {
+        fds.Clear(fd);
+        CloseSocket(fd);
+    };
     int shit;
     //std::cout << "maxfd: " << maxfd << "\t" << flush;
     switch (shit = select(mMaxfd, &bak_readfds, NULL, NULL, NULL)) {
@@ -250,44 +254,75 @@ FdSet IMServerSocket::Recv(FdSet &readfds, MsgQueueSet &data)
     default:
         //std::cout << shit << " has been selected(recv)" << std::endl;
         for (int sindex = 0; sindex < mMaxfd; ++sindex) {
-            if (bak_readfds.IsSet(sindex)) {
-                if (sindex == mListensockfd) {
-                    bak_readfds.Clear(sindex);
-                    accfds = Accept();
-                    continue;
-                }
-                /* recv message header */
-                constexpr size_t m_size = sizeof(MessageHeader);
-                size_t r_size;
-                char msghdr_c[m_size];
-                auto stat = recv_wait(sindex, msghdr_c, m_size);
-                if (stat > 0) {
-                    //int msghdr_n=(*reinterpret_cast<int*>(msghdr_c));
-                    auto msghdr = reinterpret_cast<MessageHeader *>(msghdr_c);
-                    r_size = msghdr->length;
+            if (!bak_readfds.IsSet(sindex)) {
+                continue;
+            }
+            if (sindex == mListensockfd) {
+                bak_readfds.Clear(sindex);
+                accfds = Accept();
+                continue;
+            }
+            FdSet rfds;
+            rfds.Set(sindex);
+            timeval tt{0, 0};
+            while (select(sindex + 1, &rfds, NULL, NULL, &tt) > 0) {
+                auto &mq = rmqs[sindex];
+                if (mq.empty() || mq.back().size() == reinterpret_cast<MessageHeader *>(mq.back().data())->length) {
+                    /* message queue is empty OR last receive packet is complete */
+                    MsgType t_msg;
+                    // recv message hdr
+                    unsigned int buf_sz = sizeof(MessageHeader);
+                    t_msg.resize(buf_sz);
+                    unsigned int r_sz = recv(sindex, t_msg.data(), buf_sz, 0);
+                    if (r_sz <= 0) {
+                        error_process(sindex, readfds);
+                        break;
+                    }
+                    t_msg.resize(r_sz);
+                    // if hdr recv completely, recv message text
+                    if (r_sz == buf_sz) {
+                        buf_sz = reinterpret_cast<MessageHeader *>(t_msg.data())->length;
+                        if (r_sz < buf_sz) {
+                            t_msg.resize(buf_sz);
+                            r_sz = recv(sindex, t_msg.data() + sizeof(MessageHeader), buf_sz - sizeof(MessageHeader), 0);
+                            if (r_sz <= 0) {
+                                error_process(sindex, readfds);
+                                break;
+                            }
+                            t_msg.resize(sizeof(MessageHeader) + r_sz);
+                        }
+                    }
+                    // no matter packet is complete or not, push to message queue
+                    mq.push(std::move(t_msg));
                 } else {
-                    readfds.Clear(sindex);
-                    CloseSocket(sindex);
-                    //data[sindex] = nullptr;
-                    continue;
-                }
-                //std::cout << "In Recv:  char *buf = new char[size[sindex]], sindex: " << sindex << " maxfd: " << maxfd << std::endl;
-                /* recv message text */
-                char *buf = new char[r_size];
-                if (r_size - m_size) {
-                    stat = recv_wait(sindex, buf + m_size, r_size - m_size);
-                } else {
-                    stat = 1;
-                }
-                if (stat > 0) {
-                    memcpy(buf, msghdr_c, m_size);
-                    data[sindex].emplace(buf);
-                    //print_message(buf);
-                } else {
-                    readfds.Clear(sindex);
-                    CloseSocket(sindex);
-                    //data[sindex] = nullptr;
-                    delete[] buf;
+                    /* last receive packet is not complete */
+                    auto &msg = mq.back();
+                    unsigned int buf_sz = sizeof(MessageHeader), origin_sz, r_sz;
+                    // if last packet's hdr doesn't recv completely, continue to recv hdr
+                    origin_sz = msg.size();
+                    if (origin_sz < sizeof(MessageHeader)) {
+                        msg.resize(buf_sz);
+                        r_sz = recv(sindex, msg.data() + origin_sz, buf_sz - origin_sz, 0);
+                        if (r_sz <= 0) {
+                            error_process(sindex, readfds);
+                            break;
+                        }
+                        msg.resize(r_sz + origin_sz);
+                    }
+                    // when hdr recv completely, recv message text
+                    origin_sz = msg.size();
+                    if (origin_sz >= sizeof(MessageHeader)) {
+                        buf_sz = reinterpret_cast<MessageHeader *>(msg.data())->length;
+                        if (origin_sz < buf_sz) {
+                            msg.resize(buf_sz);
+                            r_sz = recv(sindex, msg.data() + origin_sz, buf_sz - origin_sz, 0);
+                            if (r_sz <= 0) {
+                                error_process(sindex, readfds);
+                                break;
+                            }
+                            msg.resize(r_sz + origin_sz);
+                        }
+                    }
                 }
             }
         }
@@ -319,7 +354,7 @@ void IMServerSocket::Send(const FdSet &wfds, MsgQueueSet &mqs)
                 auto &mq = mqs[sindex];
                 while (!mq.empty()) {
                     auto &msg = mq.front();
-                    auto temp = msg.get();
+                    auto temp = msg.data();
                     //print_message(temp);
                     if ((s_size = send(sindex, temp, reinterpret_cast<const MessageHeader *>(temp)->length, 0)) <= 0) {
                         if (s_size == 0) {
@@ -382,40 +417,6 @@ void IMServerSocket::updateMaxfd(int fd)
     //std::cout<<"maxfd update! maxfd: "<<maxfd<<std::endl;
 }
 
-ssize_t IMServerSocket::recv_wait(int fd, void *buf, size_t n)
-{
-    ssize_t r_size;
-    size_t total = 0;
-
-    timeval tv{3, 0};
-
-    while (total < n) {
-        FdSet rfds;
-        rfds.Set(fd);
-        timeval mytv(tv);
-        if (select(fd + 1, &rfds, NULL, NULL, &mytv) > 0) {
-            if ((r_size = recv(fd, static_cast<char *>(buf) + total, n - total, 0)) == -1) {
-                if (errno == ECONNRESET) {
-                    return -1;
-                } else if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN) {
-                    throw NetException(errno, "socket is not readable!");
-                } else {
-                    throw NetException(errno, "recv failed!");
-                }
-            } else if (r_size == 0) {
-                //std::cerr << "IMServerSocket " << fd << ": Connection Terminate!(recv)" << std::endl;
-                return 0;
-            } else {
-                total += r_size;
-            }
-        } else {
-            return -1;
-        }
-    }
-
-    return total;
-}
-
 IMServer::IMServer(const char *ip, uint16_t port)
 {
     if ((mMysql = mysql_init(NULL)) == NULL) {
@@ -464,10 +465,18 @@ FdSet IMServer::packUnpack(int maxfd, const FdSet &fds)
             auto &rmq = mRmqs[i];
             while (!rmq.empty()) {
                 auto &rmsg = rmq.front();
-                auto p_rc = rmsg.get();
+                if (rmsg.size() < sizeof(MessageHeader)) {
+                    break;
+                }
+                auto p_rc = rmsg.data();
                 auto p_rmhdr = reinterpret_cast<const MessageHeader *>(p_rc);
+                if (rmsg.size() < p_rmhdr->length) {
+                    break;
+                }
+
                 string raw_mtext(p_rc + sizeof(MessageHeader), p_rc + p_rmhdr->length);
-                string mtext = raw_mtext.c_str();
+                string mtext(raw_mtext.c_str());
+
                 switch (p_rmhdr->head) {
                 case MessageHeader::VERIFY_REQ:
                     switch (p_rmhdr->kind) {
@@ -737,14 +746,14 @@ int IMServer::getOnlineSockfds(FdSet &fds)
 
 void IMServer::packIntoMSL(int sockfd, unsigned int head, unsigned int kind, unsigned int length, const char *data)
 {
-    char *msg = new char[length];
-    auto p_mhdr = reinterpret_cast<MessageHeader *>(msg);
+    MsgType msg(length);
+    auto p_mhdr = reinterpret_cast<MessageHeader *>(msg.data());
     p_mhdr->head = head;
     p_mhdr->kind = kind;
     p_mhdr->length = length;
-    memcpy(msg + sizeof(MessageHeader), data, length - sizeof(MessageHeader));
+    memcpy(msg.data() + sizeof(MessageHeader), data, length - sizeof(MessageHeader));
 
-    mSmqs[sockfd].emplace(msg);
+    mSmqs[sockfd].push(std::move(msg));
 }
 
 int IMServer::packReplyOnline(int sockfd)
@@ -1034,11 +1043,6 @@ void IMServer::Main()
                 cout << i << ", ";
         }
         cout << endl;*/
-        /*for (int i = 0; i < maxfd; ++i) {
-            if (allfds.IsSet(i)) {
-                mRmqs[i].clear();
-            }
-        }*/
         //cout << "----read----" << endl;
         FdSet readfds = mServerSocket.Recv(allfds, mRmqs);
         /*cout << "readfds: ";
@@ -1047,17 +1051,11 @@ void IMServer::Main()
                 cout << i << ", ";
         }
         cout << endl;*/
-        /*for (int i = 0; i < maxfd; ++i) {
-            if (allfds.IsSet(i)) {
-                mSmqs[i].clear();
-            }
-        }*/
         //cout << "----pack----" << endl;
         FdSet writefds = packUnpack(maxfd, readfds);
         if (!writefds.IsEmpty()) {
             //cout << "----write----" << endl;
-            /*cout << endl;
-            cout << "writefds: ";
+            /*cout << "writefds: ";
             for (int i = 0; i < maxfd; ++i) {
                 if (writefds.IsSet(i))
                     cout << i << ", ";

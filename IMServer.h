@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace herry
 {
@@ -100,7 +101,8 @@ namespace
 constexpr size_t MAX_SELECT = sizeof(fdset::FdSet::fds_bits) * 8;
 }
 
-using MsgQueue = std::queue<std::unique_ptr<char[]>>;
+using MsgType = std::vector<char>;
+using MsgQueue = std::queue<std::vector<char>>;
 using MsgQueueSet = std::array<MsgQueue, MAX_SELECT>;
 
 class IMServerSocket final
@@ -127,7 +129,6 @@ public:
 private:
     void setNonBlock(const int sockfd);
     void updateMaxfd(int fd);
-    ssize_t recv_wait(int fd, void *buf, size_t n);
 
     int mMaxfd = 0, mListensockfd = -1;
     bool mLsCreated = false;
