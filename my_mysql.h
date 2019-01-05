@@ -41,8 +41,6 @@ public:
     {
         FindTupleHelper<Tuple, N - 1>::find(item, t);
         std::get<N - 1>(t) = lexical_cast<typename std::remove_reference<decltype(std::get<N - 1>(t))>::type>(item[N - 1]);
-        //std::istringstream sin(item[N - 1]);
-        //sin >> std::get<N - 1>(t);
     }
 };
 
@@ -53,8 +51,6 @@ public:
     static void find(MYSQL_ROW item, Tuple &t)
     {
         std::get<0>(t) = lexical_cast<typename std::remove_reference<decltype(std::get<0>(t))>::type>(item[0]);
-        //std::istringstream sin(item[0]);
-        //sin >> std::get<0>(t);
     }
 };
 
@@ -149,13 +145,9 @@ bool MySql::FindTuples(const char *sql_handle, Container &container)
 
     mysql_query(mMysql, sql_handle);
     result = mysql_store_result(mMysql);
-    row = mysql_fetch_row(result);
-    //std::istringstream sin;
     while ((row = mysql_fetch_row(result))) {
-        //sin.str(*row);
         typename Container::value_type t;
         t = lexical_cast<decltype(t)>(*row);
-        //sin >> t;
         container.push_back(std::move(t));
     }
     mysql_free_result(result);
@@ -172,8 +164,6 @@ bool MySql::FindTuples(const char *sql_handle, Container<std::tuple<Args...>> &c
 
     mysql_query(mMysql, sql_handle);
     result = mysql_store_result(mMysql);
-    row = mysql_fetch_row(result);
-    std::istringstream sin;
     while ((row = mysql_fetch_row(result))) {
         std::tuple<Args...> t;
         constexpr size_t amount = sizeof...(Args);
@@ -188,8 +178,6 @@ bool MySql::FindTuples(const char *sql_handle, Container<std::tuple<Args...>> &c
 template <typename T, typename... Args>
 void MySql::readItem(MYSQL_ROW item, T &t, Args &... rest)
 {
-    //std::istringstream sin(*item);
-    //sin >> t;
     t = lexical_cast<T>(*item);
     readItem(++item, rest...);
 }
@@ -197,8 +185,6 @@ void MySql::readItem(MYSQL_ROW item, T &t, Args &... rest)
 template <typename T>
 void MySql::readItem(MYSQL_ROW item, T &t)
 {
-    //std::istringstream sin(*item);
-    //sin >> t;
     t = lexical_cast<T>(*item);
 }
 

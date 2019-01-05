@@ -13,9 +13,9 @@ CXXFLAGS:= -g -Wall $(DEFINES) $(INCLUDE) `mysql_config --cflags` -std=c++11
 
 all: $(TARGET)
 
-my_mysql.o: my_mysql.cpp
+my_mysql.o: my_mysql.cpp my_mysql.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
-imserver.o: imserver.cpp
+imserver.o: imserver.cpp imserver.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
 main.o: main.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
