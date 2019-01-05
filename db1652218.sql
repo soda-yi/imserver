@@ -7,7 +7,7 @@ drop table if exists user;
 create table user(
     id int unsigned primary key auto_increment,
     name varchar(28) not null,
-    passwd varchar(26),
+    passwd varchar(32),
     msgnum int unsigned not null default 0,
     unique key(name)
 );
@@ -34,7 +34,7 @@ insert into user (name) values ('all');
 insert into user (name) values ('herry');
 insert into user (name) values ('percy');
 insert into user (name) values ('richael');
-insert into user (name,passwd) values ('¶ÎÎ¡','pe1RO6vm/HVwE');
+insert into user (name) values ('¶ÎÎ¡');
 insert into user (name) values ('dw');
 insert into user (name) values ('·½ºÍÒ×');
 insert into user (name) values ('fhy');

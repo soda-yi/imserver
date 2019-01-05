@@ -1,9 +1,9 @@
-#include "IMServer.h"
+#include "imserver.h"
 
-#include <unistd.h>
-#include <sys/wait.h>
-#include <sys/signal.h>
 #include <sys/prctl.h>
+#include <sys/signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 extern char **environ;
 char **g_argv;
@@ -65,7 +65,7 @@ int main(int argc, char **argv)
 {
     g_argv = argv;
     if (daemon(1, 1) < 0) {
-    //if(0){
+        //if(0){
         perror("error daemon.../n");
         exit(1);
     }

@@ -13,10 +13,13 @@
 #include <map>
 #include <memory>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "my_mysql.h"
 
 namespace herry
 {
@@ -40,7 +43,6 @@ private:
 };
 
 std::string GetSystemTime(std::time_t &tt);
-std::string CryptPassword(const std::string &passwd);
 
 class Logger
 {
@@ -105,12 +107,28 @@ using MsgType = std::vector<char>;
 using MsgQueue = std::queue<std::vector<char>>;
 using MsgQueueSet = std::array<MsgQueue, MAX_SELECT>;
 
+class IMMySql : public mysql::MySql
+{
+public:
+    IMMySql()
+    {
+        Connect("localhost", "u1652218", "u1652218", "db1652218", 0);
+        SetCharacterSet("gbk");
+    }
+    bool FindUserNameBySockfd(int sockfd, std::string &username);
+    bool FindSockfdByUserName(const std::string &username, int &sockfd);
+    bool FindUidByUserName(const std::string &username, unsigned int &uid);
+    bool FindUserNameByUid(unsigned int uid, std::string &username);
+    bool FindUidBySockfd(int sockfd, unsigned int &uid);
+    void SaveMessage(unsigned int rid, unsigned int sid, const std::string &message, std::time_t tt);
+    std::string GetOnlineUserName(int sockfd);
+    int GetOnlineSockfds(fdset::FdSet &fds);
+};
+
 class IMServerSocket final
 {
 public:
-    IMServerSocket()
-    {
-    }
+    IMServerSocket() = default;
     ~IMServerSocket();
 
     void SetServerAddr(const sockaddr_in &addr);
@@ -150,23 +168,6 @@ private:
     void chgLoginStatus(unsigned int uid, bool status);
     void clearClosedSock(int sockfd);
 
-    template <typename T, typename... Tuple>
-    bool findTuple(const char *sql_handle, T &t, Tuple &... tuple);
-    template <typename T, typename... Args>
-    void readItem(MYSQL_ROW item, T &t, Args &... rest);
-    template <typename T>
-    void readItem(MYSQL_ROW item, T &t);
-    bool findUserNameBySockfd(int sockfd, std::string &username);
-    bool findSockfdByUserName(const std::string &username, int &sockfd);
-    bool findUidByUserName(const std::string &username, unsigned int &uid);
-    bool findUserNameByUid(unsigned int uid, std::string &username);
-    bool findUidBySockfd(int sockfd, unsigned int &uid);
-    void databaseIDUOperation(const char *sql_handle);
-    void saveMessage(unsigned int rid, unsigned int sid, const std::string &message, std::time_t tt);
-
-    std::string getOnlineUserName(int sockfd);
-    int getOnlineSockfds(fdset::FdSet &fds);
-
     void packIntoMSL(int sockfd, unsigned int head, unsigned int kind, unsigned int length, const char *data = nullptr);
     fdset::FdSet packUnpack(int maxfd, const fdset::FdSet &fds);
     int packReplyVerifyUserName(int sockfd, const std::string &username);
@@ -181,7 +182,7 @@ private:
     int packReplyHistory(int sockfd, const std::string &message);
 
     IMServerSocket mServerSocket;
-    MYSQL *mMysql;
+    IMMySql mMysql;
     MsgQueueSet mRmqs, mSmqs;
 };
 

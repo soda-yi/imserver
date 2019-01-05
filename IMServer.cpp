@@ -1,14 +1,15 @@
-#include "IMServer.h"
-#include "MessageHeader.h"
+#include "imserver.h"
 
 #include <arpa/inet.h>
-#include <crypt.h>
 #include <fcntl.h>
 
 #include <chrono>
 #include <iostream>
 #include <sstream>
 #include <stack>
+#include <tuple>
+
+#include "message_header.h"
 
 #include <iomanip>
 using namespace std;
@@ -25,27 +26,13 @@ using std::ostringstream;
 using std::size_t;
 using std::string;
 using std::time_t;
+using std::vector;
 
 namespace herry
 {
 namespace utility
 {
 ofstream Logger::mFout("./IMServer.log", ofstream::app);
-
-string CryptPassword(const string &passwd)
-{
-    ostringstream cryptedpasswd;
-
-    for (size_t count = 0; count < passwd.length(); count += 8) {
-        const char *key = passwd.c_str() + count;
-        char slat[2] = {""};
-        slat[0] = key[0];
-        slat[1] = key[1];
-        cryptedpasswd << crypt(key, slat);
-    }
-
-    return cryptedpasswd.str();
-}
 
 string GetSystemTime(time_t &tt)
 {
@@ -140,6 +127,104 @@ FdSet operator|(const FdSet &fds1, const FdSet &fds2)
 
 namespace imserver
 {
+
+bool IMMySql::FindUserNameBySockfd(int sockfd, string &username)
+{
+    ostringstream sql_handle;
+    sql_handle << "select u.name from user u inner join loginfo l on u.id=l.uid where l.sockfd=" << sockfd;
+    return FindTuple(sql_handle.str().c_str(), username);
+}
+
+bool IMMySql::FindSockfdByUserName(const string &username, int &sockfd)
+{
+    ostringstream sql_handle;
+    sql_handle << "select l.sockfd from user u inner join loginfo l on u.id=l.uid where u.name=\'" << username << '\'';
+    return FindTuple(sql_handle.str().c_str(), sockfd);
+}
+
+bool IMMySql::FindUidByUserName(const string &username, unsigned int &uid)
+{
+    ostringstream sql_handle;
+    sql_handle << "select id from user where name=\'" << username << '\'';
+    return FindTuple(sql_handle.str().c_str(), uid);
+}
+
+bool IMMySql::FindUserNameByUid(unsigned int uid, string &username)
+{
+    ostringstream sql_handle;
+    sql_handle << "select name from user where id=" << uid;
+    return FindTuple(sql_handle.str().c_str(), username);
+}
+
+bool IMMySql::FindUidBySockfd(int sockfd, unsigned int &uid)
+{
+    ostringstream sql_handle;
+    sql_handle << "select uid from loginfo where sockfd=" << sockfd;
+    return FindTuple(sql_handle.str().c_str(), uid);
+}
+
+void IMMySql::SaveMessage(unsigned int rid, unsigned int sid, const string &message, time_t tt)
+{
+    ostringstream sql_handle;
+    sql_handle << "insert into message (rid,sid,content,sendtime) values (" << rid << ',' << sid << ",\'" << message << "\'," << tt << ')';
+    IDUOperation(sql_handle.str().c_str());
+}
+
+string IMMySql::GetOnlineUserName(int sockfd)
+{
+    MYSQL_RES *result;
+    MYSQL_ROW row;
+    ostringstream sout, sql_handle;
+
+    sql_handle << "select u.name from user u inner join loginfo l on u.id=l.uid where l.sockfd<>" << sockfd << " order by u.id";
+
+    vector<string> usernames;
+    FindTuples(sql_handle.str().c_str(), usernames);
+    for (const auto &name : usernames) {
+        sout << '@' << name;
+    }
+
+    /*
+    mysql_query(mMysql, sql_handle.str().c_str());
+    result = mysql_store_result(mMysql);
+    while ((row = mysql_fetch_row(result))) {
+        sout << '@' << row[0];
+    }
+    mysql_free_result(result);
+    */
+
+    return sout.str();
+}
+
+int IMMySql::GetOnlineSockfds(FdSet &fds)
+{
+    int maxfd = 0;
+    MYSQL_RES *result;
+    MYSQL_ROW row;
+    ostringstream sql_handle;
+
+    sql_handle << "select sockfd from loginfo where status=1 and sockfd<>-1";
+
+    vector<int> sockfds;
+    FindTuples(sql_handle.str().c_str(), sockfds);
+    for (auto fd : sockfds) {
+        fds.Set(fd);
+        maxfd = ((fd + 1) > maxfd ? fd + 1 : maxfd);
+    }
+
+    /*
+    mysql_query(mMysql, sql_handle.str().c_str());
+    result = mysql_store_result(mMysql);
+    while ((row = mysql_fetch_row(result)) != NULL) {
+        int fd = atoi(row[0]);
+        fds.Set(fd);
+        maxfd = ((fd + 1) > maxfd ? fd + 1 : maxfd);
+    }
+    mysql_free_result(result);
+    */
+
+    return maxfd;
+}
 
 IMServerSocket::~IMServerSocket()
 {
@@ -419,20 +504,8 @@ void IMServerSocket::updateMaxfd(int fd)
 
 IMServer::IMServer(const char *ip, uint16_t port)
 {
-    if ((mMysql = mysql_init(NULL)) == NULL) {
-        throw std::runtime_error("mysql_init failed!");
-        //cout << "mysql_init failed" << endl;
-    }
-
-    if (mysql_real_connect(mMysql, "localhost", "u1652218", "u1652218", "db1652218", 0, NULL, 0) == NULL) {
-        throw std::runtime_error("mysql_real_connect failed!");
-        //cout << "mysql_real_connect failed(" << mysql_error(mMysql) << ")" << endl;
-    }
-
-    mysql_set_character_set(mMysql, "gbk");
-
-    databaseIDUOperation("delete from loginfo");
-    databaseIDUOperation("insert into loginfo (uid,sockfd,status) values (1,-1,1)");
+    mMysql.IDUOperation("delete from loginfo");
+    mMysql.IDUOperation("insert into loginfo (uid,sockfd,status) values (1,-1,1)");
 
     sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
@@ -448,7 +521,7 @@ IMServer::IMServer(const char *ip, uint16_t port)
 
 IMServer::~IMServer()
 {
-    databaseIDUOperation("delete from loginfo");
+    mMysql.IDUOperation("delete from loginfo");
 }
 
 FdSet IMServer::packUnpack(int maxfd, const FdSet &fds)
@@ -530,20 +603,6 @@ FdSet IMServer::packUnpack(int maxfd, const FdSet &fds)
     return ret;
 }
 
-void IMServer::databaseIDUOperation(const char *sql_handle)
-{
-    MYSQL_RES *result;
-    ostringstream serr;
-
-    if (mysql_query(mMysql, sql_handle)) {
-        serr << "mysql_query failed(" << mysql_error(mMysql) << ")";
-        Logger::Log(serr.str());
-    }
-
-    result = mysql_store_result(mMysql);
-    mysql_free_result(result);
-}
-
 unsigned int IMServer::verifyUserName(int sockfd, const string &username)
 {
     if (username == "all") {
@@ -554,18 +613,18 @@ unsigned int IMServer::verifyUserName(int sockfd, const string &username)
     ostringstream serr, sql_handle;
     unsigned int uid;
     sql_handle << "select id from user where name=\'" << username << '\'';
-    if (!findUidByUserName(username, uid)) {
+    if (!mMysql.FindUidByUserName(username, uid)) {
         Logger::Log(username + " verify username failed.");
         return MessageHeader::VERIFY_USERNAME_INCORRECT_ACK;
     };
 
     sql_handle.str("");
     sql_handle << "insert into loginfo (uid,sockfd) values (" << uid << ',' << sockfd << ')';
-    databaseIDUOperation(sql_handle.str().c_str());
+    mMysql.IDUOperation(sql_handle.str().c_str());
 
     sql_handle.str("");
     sql_handle << "select id from user where name=\'" << username << '\'' << " and passwd is null";
-    if (!findTuple(sql_handle.str().c_str(), uid)) {
+    if (!mMysql.FindTuple(sql_handle.str().c_str(), uid)) {
         Logger::Log(username + " verify username success.");
         return MessageHeader::VERIFY_USERNAME_CORRECT_ACK;
     };
@@ -574,22 +633,22 @@ unsigned int IMServer::verifyUserName(int sockfd, const string &username)
     return MessageHeader::VERIFY_USERNAME_CORRECT_NO_PASSWORD_ACK;
 }
 
-unsigned int IMServer::verifyPassword(int sockfd, const string &__passwd)
+unsigned int IMServer::verifyPassword(int sockfd, const string &passwd)
 {
     ostringstream serr, sql_handle;
     unsigned int uid;
-    string username, passwd(CryptPassword(__passwd));
+    string username;
 
-    if (!findUserNameBySockfd(sockfd, username)) {
+    if (!mMysql.FindUserNameBySockfd(sockfd, username)) {
         Logger::Log("no exist sockfd, verify password failed.");
         return MessageHeader::VERIFY_PASSWORD_INCORRECT_ACK;
     }
 
     sql_handle << "select id from user where name=\'" << username << "\' and passwd is null";
-    if (findTuple(sql_handle.str().c_str(), uid)) {
+    if (mMysql.FindTuple(sql_handle.str().c_str(), uid)) {
         sql_handle.str("");
-        sql_handle << "update user set passwd=\'" << passwd << "\' where name=\'" << username << "\' and passwd is null";
-        databaseIDUOperation(sql_handle.str().c_str());
+        sql_handle << "update user set passwd=MD5(\'" << passwd << "\') where name=\'" << username << "\' and passwd is null";
+        mMysql.IDUOperation(sql_handle.str().c_str());
 
         chgLoginStatus(uid, 1);
         Logger::Log(username + " set password success and log in.");
@@ -597,8 +656,8 @@ unsigned int IMServer::verifyPassword(int sockfd, const string &__passwd)
     }
 
     sql_handle.str("");
-    sql_handle << "select id from user where name=\'" << username << "\' and passwd=\'" << passwd << '\'';
-    if (findTuple(sql_handle.str().c_str(), uid)) {
+    sql_handle << "select id from user where name=\'" << username << "\' and passwd=MD5(\'" << passwd << "\')";
+    if (mMysql.FindTuple(sql_handle.str().c_str(), uid)) {
         chgLoginStatus(uid, 1);
         Logger::Log(username + " verify password success and log in.");
         return MessageHeader::VERIFY_PASSWORD_CORRECT_ACK;
@@ -612,76 +671,7 @@ void IMServer::chgLoginStatus(unsigned int uid, bool status)
 {
     ostringstream sql_handle;
     sql_handle << "update loginfo set status=" << status << " where uid = " << uid;
-    databaseIDUOperation(sql_handle.str().c_str());
-}
-
-template <typename T, typename... Tuple>
-bool IMServer::findTuple(const char *sql_handle, T &t, Tuple &... tuple)
-{
-    MYSQL_RES *result;
-    MYSQL_ROW row;
-    bool ret = false;
-
-    mysql_query(mMysql, sql_handle);
-    result = mysql_store_result(mMysql);
-    row = mysql_fetch_row(result);
-    if (row) {
-        readItem(row, t, tuple...);
-        ret = true;
-    }
-    mysql_free_result(result);
-
-    return ret;
-}
-
-template <typename T, typename... Args>
-void IMServer::readItem(MYSQL_ROW item, T &t, Args &... rest)
-{
-    istringstream sin(*item);
-    sin >> t;
-    readItem(++item, rest...);
-}
-
-template <typename T>
-void IMServer::readItem(MYSQL_ROW item, T &t)
-{
-    istringstream sin(*item);
-    sin >> t;
-}
-
-bool IMServer::findUserNameBySockfd(int sockfd, string &username)
-{
-    ostringstream sql_handle;
-    sql_handle << "select u.name from user u inner join loginfo l on u.id=l.uid where l.sockfd=" << sockfd;
-    return findTuple(sql_handle.str().c_str(), username);
-}
-
-bool IMServer::findSockfdByUserName(const string &username, int &sockfd)
-{
-    ostringstream sql_handle;
-    sql_handle << "select l.sockfd from user u inner join loginfo l on u.id=l.uid where u.name=\'" << username << '\'';
-    return findTuple(sql_handle.str().c_str(), sockfd);
-}
-
-bool IMServer::findUidByUserName(const string &username, unsigned int &uid)
-{
-    ostringstream sql_handle;
-    sql_handle << "select id from user where name=\'" << username << '\'';
-    return findTuple(sql_handle.str().c_str(), uid);
-}
-
-bool IMServer::findUserNameByUid(unsigned int uid, string &username)
-{
-    ostringstream sql_handle;
-    sql_handle << "select name from user where id=" << uid;
-    return findTuple(sql_handle.str().c_str(), username);
-}
-
-bool IMServer::findUidBySockfd(int sockfd, unsigned int &uid)
-{
-    ostringstream sql_handle;
-    sql_handle << "select uid from loginfo where sockfd=" << sockfd;
-    return findTuple(sql_handle.str().c_str(), uid);
+    mMysql.IDUOperation(sql_handle.str().c_str());
 }
 
 void IMServer::clearClosedSock(int sockfd)
@@ -697,51 +687,12 @@ void IMServer::clearClosedSock(int sockfd)
     }
 
     sout << "Close Socket: " << sockfd;
-    if (findUserNameBySockfd(sockfd, username)) {
+    if (mMysql.FindUserNameBySockfd(sockfd, username)) {
         sout << ", " << username << " log out.";
         sql_handle << "delete from loginfo where sockfd=" << sockfd;
-        databaseIDUOperation(sql_handle.str().c_str());
+        mMysql.IDUOperation(sql_handle.str().c_str());
     }
     Logger::Log(sout.str());
-}
-
-string IMServer::getOnlineUserName(int sockfd)
-{
-    MYSQL_RES *result;
-    MYSQL_ROW row;
-    ostringstream sout, sql_handle;
-
-    sql_handle << "select u.name from user u inner join loginfo l on u.id=l.uid where l.sockfd<>" << sockfd << " order by u.id";
-
-    mysql_query(mMysql, sql_handle.str().c_str());
-    result = mysql_store_result(mMysql);
-    while ((row = mysql_fetch_row(result))) {
-        sout << '@' << row[0];
-    }
-    mysql_free_result(result);
-
-    return sout.str();
-}
-
-int IMServer::getOnlineSockfds(FdSet &fds)
-{
-    int maxfd = 0;
-    MYSQL_RES *result;
-    MYSQL_ROW row;
-    ostringstream sql_handle;
-
-    sql_handle << "select sockfd from loginfo where status=1 and sockfd<>-1";
-
-    mysql_query(mMysql, sql_handle.str().c_str());
-    result = mysql_store_result(mMysql);
-    while ((row = mysql_fetch_row(result)) != NULL) {
-        int fd = atoi(row[0]);
-        fds.Set(fd);
-        maxfd = ((fd + 1) > maxfd ? fd + 1 : maxfd);
-    }
-    mysql_free_result(result);
-
-    return maxfd;
 }
 
 void IMServer::packIntoMSL(int sockfd, unsigned int head, unsigned int kind, unsigned int length, const char *data)
@@ -758,7 +709,7 @@ void IMServer::packIntoMSL(int sockfd, unsigned int head, unsigned int kind, uns
 
 int IMServer::packReplyOnline(int sockfd)
 {
-    string users = getOnlineUserName(sockfd);
+    string users = mMysql.GetOnlineUserName(sockfd);
     size_t sz = users.length() + sizeof(MessageHeader);
     packIntoMSL(sockfd, MessageHeader::ONLINE_FRIENDS_ACK, MessageHeader::NON_KIND, sz, users.c_str());
     return sockfd;
@@ -789,7 +740,7 @@ FdSet IMServer::packReplyVerifyPassword(int sockfd, const string &text)
 FdSet IMServer::packLoginBroadcast(int sockfd)
 {
     FdSet onlinefds;
-    int mymaxfd = getOnlineSockfds(onlinefds);
+    int mymaxfd = mMysql.GetOnlineSockfds(onlinefds);
     onlinefds.Clear(sockfd);
 
     for (int j = 0; j != mymaxfd; ++j) {
@@ -808,10 +759,10 @@ FdSet IMServer::packRemoteLogin(int sockfd)
     int kickedfd = -1;
 
     sql_handle << "select sockfd from loginfo where sockfd<>" << sockfd << " and uid in (select uid from loginfo where sockfd=" << sockfd << ')';
-    findTuple(sql_handle.str().c_str(), kickedfd);
+    mMysql.FindTuple(sql_handle.str().c_str(), kickedfd);
 
     string kicked_username;
-    findUserNameBySockfd(kickedfd, kicked_username);
+    mMysql.FindUserNameBySockfd(kickedfd, kicked_username);
 
     if (kickedfd != -1) {
         packIntoMSL(sockfd, MessageHeader::REMOTE_LOGIN, MessageHeader::REMOTE_LOGIN_LOGIN, sizeof(MessageHeader));
@@ -822,7 +773,7 @@ FdSet IMServer::packRemoteLogin(int sockfd)
 
         sql_handle.str("");
         sql_handle << "delete from loginfo where sockfd=" << kickedfd;
-        databaseIDUOperation(sql_handle.str().c_str());
+        mMysql.IDUOperation(sql_handle.str().c_str());
 
         Logger::Log(kicked_username + " remote login.");
     }
@@ -838,9 +789,9 @@ FdSet IMServer::packForward(int sockfd, unsigned int mhdr_kind, const string &co
     time_t tt;
 
     string s_username;
-    if (!findUserNameBySockfd(sockfd, s_username)) {
+    if (!mMysql.FindUserNameBySockfd(sockfd, s_username)) {
         ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_USER_NOT_EXIST_ACK));
-        serr << "Can't find sender's sockfd in database. Sender: " << s_username;
+        serr << "Can't mMysql.Find sender's sockfd in database. Sender: " << s_username;
         Logger::Log(serr.str());
         return ret;
     }
@@ -857,9 +808,9 @@ FdSet IMServer::packForward(int sockfd, unsigned int mhdr_kind, const string &co
     }
 
     unsigned int sid;
-    if (!findUidByUserName(s_username, sid)) {
+    if (!mMysql.FindUidByUserName(s_username, sid)) {
         ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_USER_NOT_EXIST_ACK));
-        serr << "Can't find sender's uid in database. Sender: " << s_username;
+        serr << "Can't mMysql.Find sender's uid in database. Sender: " << s_username;
         Logger::Log(serr.str());
         return ret;
     }
@@ -868,11 +819,11 @@ FdSet IMServer::packForward(int sockfd, unsigned int mhdr_kind, const string &co
     string r_username(content.substr(1, pos - 1));
     if (r_username == "all") {
         FdSet onlinefds;
-        int maxfd = getOnlineSockfds(onlinefds);
+        int maxfd = mMysql.GetOnlineSockfds(onlinefds);
         onlinefds.Clear(sockfd);
         GetSystemTime(tt);
         for (int i = 0; i != maxfd; ++i) {
-            if (onlinefds.IsSet(i) && findUidBySockfd(i, rid)) {
+            if (onlinefds.IsSet(i) && mMysql.FindUidBySockfd(i, rid)) {
                 mycontent.str("");
                 if (mhdr_kind == MessageHeader::MESSAGE_FORWARD_TEXT) {
                     mycontent << tt;
@@ -881,24 +832,24 @@ FdSet IMServer::packForward(int sockfd, unsigned int mhdr_kind, const string &co
                 ret.Set(packMessage(i, mhdr_kind, mycontent.str()));
             }
         }
-        saveMessage(0, sid, s_username + content, tt);
+        mMysql.SaveMessage(0, sid, s_username + content, tt);
     } else {
-        if (!findUidByUserName(r_username, rid)) {
+        if (!mMysql.FindUidByUserName(r_username, rid)) {
             ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_USER_NOT_EXIST_ACK));
-            serr << "Can't find receiver's uid in database. Receiver: " << r_username;
+            serr << "Can't mMysql.Find receiver's uid in database. Receiver: " << r_username;
             Logger::Log(serr.str());
             return ret;
         }
         int rfd;
-        if (!findSockfdByUserName(r_username, rfd)) {
+        if (!mMysql.FindSockfdByUserName(r_username, rfd)) {
             ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_USER_NOT_ONLINE_ACK));
-            serr << "Can't find receiver's sockfd in database. Receiver: " << r_username;
+            serr << "Can't mMysql.Find receiver's sockfd in database. Receiver: " << r_username;
             Logger::Log(serr.str());
             return ret;
         }
         if (mhdr_kind == MessageHeader::MESSAGE_FORWARD_TEXT) {
             mycontent << GetSystemTime(tt);
-            saveMessage(rid, sid, s_username + content, tt);
+            mMysql.SaveMessage(rid, sid, s_username + content, tt);
         }
         mycontent << s_username << content;
         ret.Set(packMessage(rfd, mhdr_kind, mycontent.str()));
@@ -908,13 +859,6 @@ FdSet IMServer::packForward(int sockfd, unsigned int mhdr_kind, const string &co
     ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_SUCCESS_ACK));
 
     return ret;
-}
-
-void IMServer::saveMessage(unsigned int rid, unsigned int sid, const string &message, time_t tt)
-{
-    ostringstream sql_handle;
-    sql_handle << "insert into message (rid,sid,content,sendtime) values (" << rid << ',' << sid << ",\'" << message << "\'," << tt << ')';
-    databaseIDUOperation(sql_handle.str().c_str());
 }
 
 int IMServer::packMessage(int sockfd, unsigned int mhdr_kind, const string &message)
@@ -938,12 +882,12 @@ int IMServer::packReplyHistory(int sockfd, const string &message)
     unsigned int msgnum, uid, ouid;
 
     sql_handle << "select u.msgnum,u.id from user u inner join loginfo l on u.id=l.uid where l.sockfd=" << sockfd;
-    if (!findTuple(sql_handle.str().c_str(), msgnum, uid)) {
+    if (!mMysql.FindTuple(sql_handle.str().c_str(), msgnum, uid)) {
         return -1;
     };
 
     string r_username(message.substr(1, message.length() - 1));
-    if (!findUidByUserName(r_username, ouid)) {
+    if (!mMysql.FindUidByUserName(r_username, ouid)) {
         return -1;
     }
 
@@ -958,6 +902,13 @@ int IMServer::packReplyHistory(int sockfd, const string &message)
                    << " order by sendtime desc limit " << msgnum;
     }
 
+    vector<std::tuple<string, string>> msgs;
+    mMysql.FindTuples(sql_handle.str().c_str(), msgs);
+    for (const auto &msg : msgs) {
+        msg_stack.push(get<0>(msg) + get<1>(msg));
+    }
+
+    /*
     mysql_query(mMysql, sql_handle.str().c_str());
     result = mysql_store_result(mMysql);
     while ((row = mysql_fetch_row(result))) {
@@ -966,6 +917,7 @@ int IMServer::packReplyHistory(int sockfd, const string &message)
         msg_stack.push(content.str());
     }
     mysql_free_result(result);
+    */
 
     if (msg_stack.empty()) {
         packMessage(sockfd, MessageHeader::MESSAGE_FORWARD_HISTORY, string());
@@ -985,16 +937,16 @@ FdSet IMServer::packRecvFile(int sockfd, unsigned int mhdr_kind, const string &t
     FdSet ret;
 
     string r_username;
-    if (!findUserNameBySockfd(sockfd, r_username)) {
+    if (!mMysql.FindUserNameBySockfd(sockfd, r_username)) {
         ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_USER_NOT_EXIST_ACK));
-        serr << "Can't find receiver in database. Receiver: " << r_username;
+        serr << "Can't mMysql.Find receiver in database. Receiver: " << r_username;
         Logger::Log(serr.str());
         return ret;
     }
 
-    /*size_t pos = text.find(':');
+    /*size_t pos = text.mMysql.Find(':');
     if (pos == string::npos) {
-        pos = text.find("£º");
+        pos = text.mMysql.Find("£º");
     }
     if (pos == string::npos || text.empty() || text[0] != '@') {
         ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_INCORRECT_FORMAT_ACK));
@@ -1006,17 +958,17 @@ FdSet IMServer::packRecvFile(int sockfd, unsigned int mhdr_kind, const string &t
     //string s_username(text.substr(1, pos - 1));
     string s_username(text.substr(1));
     int sfd;
-    if (!findSockfdByUserName(s_username, sfd)) {
+    if (!mMysql.FindSockfdByUserName(s_username, sfd)) {
         ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_USER_NOT_ONLINE_ACK));
-        serr << "Can't find sender's sockfd in database. Sender: " << s_username;
+        serr << "Can't mMysql.Find sender's sockfd in database. Sender: " << s_username;
         Logger::Log(serr.str());
         return ret;
     }
 
     unsigned int sid;
-    if (!findUidByUserName(s_username, sid)) {
+    if (!mMysql.FindUidByUserName(s_username, sid)) {
         ret.Set(packReplyForward(sockfd, MessageHeader::MESSAGE_SEND_USER_NOT_EXIST_ACK));
-        serr << "Can't find sender's uid in database. Sender: " << s_username;
+        serr << "Can't mMysql.Find sender's uid in database. Sender: " << s_username;
         Logger::Log(serr.str());
         return ret;
     }

@@ -1,9 +1,9 @@
 SOURCE:= $(wildcard *.c) $(wildcard *.cpp)
 OBJS:= $(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SOURCE)))
-TARGET:= IMServer
+TARGET:= imserver
 
 CXX:= g++
-LIBS:=`mysql_config --libs` -lcrypt
+LIBS:=`mysql_config --libs`
 LDFLAGS:=
 DEFINES:=
 INCLUDE:= -I.
@@ -13,7 +13,9 @@ CXXFLAGS:= -g -Wall $(DEFINES) $(INCLUDE) `mysql_config --cflags` -std=c++11
 
 all: $(TARGET)
 
-IMServer.o: IMServer.cpp
+my_mysql.o: my_mysql.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
+imserver.o: imserver.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
 main.o: main.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
