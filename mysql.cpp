@@ -1,4 +1,4 @@
-#include "my_mysql.h"
+#include "mysql.hpp"
 
 #include <sstream>
 

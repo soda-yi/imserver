@@ -1,4 +1,4 @@
-use db1652218;
+use dbim;
 
 drop table if exists loginfo;
 drop table if exists message;

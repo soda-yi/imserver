@@ -3,19 +3,27 @@ OBJS:= $(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SOURCE)))
 TARGET:= imserver
 
 CXX:= g++
-LIBS:=`mysql_config --libs`
+LIBS:=
 LDFLAGS:=
 DEFINES:=
 INCLUDE:= -I.
-CXXFLAGS:= -g -Wall $(DEFINES) $(INCLUDE) `mysql_config --cflags` -std=c++11
+CXXFLAGS:= -g -Wall $(DEFINES) $(INCLUDE) -std=c++11 `mysql_config --cflags`
 
 .PHONY : all clean rebuild
 
 all: $(TARGET)
 
-my_mysql.o: my_mysql.cpp my_mysql.h
+message.o: message.cpp message.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
-imserver.o: imserver.cpp imserver.h
+select.o: select.cpp select.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
+socket.o: socket.cpp socket.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
+utility.o: utility.cpp utility.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
+mysql.o: mysql.cpp mysql.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
+imserver.o: imserver.cpp imserver.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
 main.o: main.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS) -c
@@ -26,4 +34,4 @@ clean:
 	rm -f $(TARGET) $(OBJS)
 
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS) `mysql_config --libs`

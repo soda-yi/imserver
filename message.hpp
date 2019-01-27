@@ -1,5 +1,7 @@
-#ifndef _MESSAGE_H_
-#define _MESSAGE_H_
+#ifndef _MESSAGE_HPP_
+#define _MESSAGE_HPP_
+
+#include <cstddef>
 
 namespace herry
 {
@@ -62,7 +64,42 @@ struct MessageHeader {
                                   RECV_FILE_NO_ACK = 0xffU;
 };
 
-}; // namespace message
+class Message
+{
+public:
+    Message() = default;
+    Message(std::size_t n) : mMsg(new char[n]), mSize(n), mLength(n) {}
+    Message(const Message &rhs);
+    Message(Message &&rhs);
+    ~Message() { delete[] mMsg; }
+    //explicit Message(std::size_t length) : std::vector<char>(sizeof(MessageHeader) + length) {}
+
+    void SetSize(std::size_t n);
+    void SetLength(std::size_t n);
+    std::size_t GetSize() const { return mSize; }
+    std::size_t GetLength() const { return mLength; }
+    char *GetData() { return mMsg; }
+    const char *GetData() const { return mMsg; }
+    char *GetMessageHeaderData() { return mMsg; }
+    const char *GetMessageHeaderData() const { return mMsg; }
+    char *GetMessageContentData() { return mMsg + sizeof(MessageHeader); }
+    const char *GetMessageContentData() const { return mMsg + sizeof(MessageHeader); }
+
+    void SetMessageHead(unsigned int head) { reinterpret_cast<MessageHeader *>(mMsg)->head = head; }
+    void SetMessageKind(unsigned int kind) { reinterpret_cast<MessageHeader *>(mMsg)->kind = kind; }
+    void SetMessageLength(unsigned int length) { reinterpret_cast<MessageHeader *>(mMsg)->length = length; }
+    //void SetMessageContent(const void *begin, const void *end) { memcpy(mMsg + sizeof(MessageHeader), begin, static_cast<const char *>(end) - static_cast<const char *>(begin)); }
+
+    unsigned GetMessageHead() const { return reinterpret_cast<const MessageHeader *>(mMsg)->head; }
+    unsigned GetMessageKind() const { return reinterpret_cast<const MessageHeader *>(mMsg)->kind; }
+    unsigned GetMessageLength() const { return reinterpret_cast<const MessageHeader *>(mMsg)->length; }
+
+private:
+    char *mMsg = nullptr;
+    std::size_t mSize = 0, mLength = 0;
+};
+
+} // namespace message
 } // namespace herry
 
 #endif
