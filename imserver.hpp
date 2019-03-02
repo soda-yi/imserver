@@ -36,7 +36,7 @@ class IMMySql : public mysql::MySql
 public:
     IMMySql()
     {
-        Connect("localhost", "herry", "herry123", "imdb", 0);
+        Connect("localhost", "dbaim", "dbaim123", "dbim", 0);
         SetCharacterSet("gbk");
     }
     bool FindUserNameBySockfd(int sockfd, std::string &username);
