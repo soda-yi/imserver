@@ -496,12 +496,12 @@ void IMServer::packForward(const socket_ptr &socket, unsigned int mhdr_kind, con
         std::set<int> onlinefds;
         mMysql.GetOnlineSockfds(onlinefds);
         onlinefds.erase(socket->GetSocketFd());
-        utility::GetSystemTime(tt);
+        string &&tt_str = utility::GetSystemTime(tt);
         for (auto e : mAllSocket) {
             if (onlinefds.find(e.second->GetSocketFd()) != onlinefds.end() && mMysql.FindUidBySockfd(e.second->GetSocketFd(), rid)) {
                 mycontent.str("");
                 if (mhdr_kind == MessageHeader::MESSAGE_FORWARD_TEXT) {
-                    mycontent << tt;
+                    mycontent << tt_str;
                 }
                 mycontent << s_username << content;
                 packMessage(e.second, mhdr_kind, mycontent.str());

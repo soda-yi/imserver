@@ -128,6 +128,9 @@ void Socket::recvErrorProcess(int r_sz)
     } else if (r_sz < 0) {
         if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN) {
             throw NetException(NetExceptionKind::RECV_AGAIN);
+        } else if (errno == ECONNRESET) {
+            Close();
+            throw NetException(NetExceptionKind::RECV_SHUTDOWN);
         } else {
             Close();
             throw NetException(NetExceptionKind::RECV_ERROR);
